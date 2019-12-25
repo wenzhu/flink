@@ -20,7 +20,6 @@ package org.apache.flink.table.expressions.utils
 
 import java.util
 import java.util.concurrent.Future
-
 import org.apache.calcite.plan.hep.{HepMatchOrder, HepPlanner, HepProgramBuilder}
 import org.apache.calcite.rel.RelNode
 import org.apache.calcite.rex.RexNode
@@ -37,15 +36,18 @@ import org.apache.flink.api.java.{DataSet => JDataSet}
 import org.apache.flink.api.scala.{DataSet, ExecutionEnvironment}
 import org.apache.flink.configuration.Configuration
 import org.apache.flink.core.fs.Path
-import org.apache.flink.table.api.scala.{BatchTableEnvImpl, BatchTableEnvironment}
-import org.apache.flink.table.api.{TableConfig, TableEnvImpl, TableImpl}
-import org.apache.flink.table.calcite.FlinkRelBuilder
+import org.apache.flink.table.api.scala.BatchTableEnvironment
+import org.apache.flink.table.api.TableConfig
+import org.apache.flink.table.api.internal.TableEnvImpl
+import org.apache.flink.table.api.scala.internal.BatchTableEnvironmentImpl
+import org.apache.flink.table.calcite.{CalciteParser, FlinkRelBuilder}
 import org.apache.flink.table.codegen.{Compiler, FunctionCodeGenerator, GeneratedFunction}
 import org.apache.flink.table.expressions.{Expression, ExpressionParser}
 import org.apache.flink.table.functions.ScalarFunction
 import org.apache.flink.table.plan.nodes.dataset.{DataSetCalc, DataSetScan}
 import org.apache.flink.table.plan.rules.FlinkRuleSets
 import org.apache.flink.types.Row
+
 import org.junit.Assert._
 import org.junit.{After, Before}
 import org.mockito.Mockito._
@@ -85,7 +87,7 @@ abstract class ExpressionTestBase {
     when(jDataSetMock.getType).thenReturn(typeInfo)
 
     val env = ExecutionEnvironment.getExecutionEnvironment
-    val tEnv = BatchTableEnvironment.create(env).asInstanceOf[BatchTableEnvImpl]
+    val tEnv = BatchTableEnvironment.create(env).asInstanceOf[BatchTableEnvironmentImpl]
     tEnv.registerDataSet(tableName, dataSetMock)
     functions.foreach(f => tEnv.registerFunction(f._1, f._2))
 
@@ -177,12 +179,13 @@ abstract class ExpressionTestBase {
 
   private def addSqlTestExpr(sqlExpr: String, expected: String): Unit = {
     // create RelNode from SQL expression
-    val parsed = planner.parse(s"SELECT $sqlExpr FROM $tableName")
+    val parsed = new CalciteParser(context._2.getParserConfig)
+      .parse(s"SELECT $sqlExpr FROM $tableName")
     val validated = planner.validate(parsed)
     val converted = planner.rel(validated).rel
 
-    val env = context._2.asInstanceOf[BatchTableEnvImpl]
-    val optimized = env.optimize(converted)
+    val env = context._2.asInstanceOf[BatchTableEnvironmentImpl]
+    val optimized = env.optimizer.optimize(converted)
 
     // throw exception if plan contains more than a calc
     if (!optimized.getInput(0).isInstanceOf[DataSetScan]) {
@@ -194,14 +197,13 @@ abstract class ExpressionTestBase {
 
   private def addTableApiTestExpr(tableApiExpr: Expression, expected: String): Unit = {
     // create RelNode from Table API expression
-    val env = context._2.asInstanceOf[BatchTableEnvImpl]
-    val converted = env
+    val env = context._2.asInstanceOf[BatchTableEnvironmentImpl]
+    val table = env
       .scan(tableName)
       .select(tableApiExpr)
-      .asInstanceOf[TableImpl]
-      .getRelNode
+    val converted = env.getRelBuilder.tableOperation(table.getQueryOperation).build()
 
-    val optimized = env.optimize(converted)
+    val optimized = env.optimizer.optimize(converted)
 
     testExprs += ((tableApiExpr.toString, extractRexNode(optimized), expected))
   }

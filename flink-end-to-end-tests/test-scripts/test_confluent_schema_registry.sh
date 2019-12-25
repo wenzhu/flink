@@ -34,24 +34,22 @@ function verify_output {
   fi
 }
 
-function test_cleanup {
-  # don't call ourselves again for another signal interruption
-  trap "exit -1" INT
-  # don't call ourselves again for normal exit
-  trap "" EXIT
+function test_setup {
+  start_kafka_cluster
+  start_confluent_schema_registry
+}
 
+function test_cleanup {
   stop_confluent_schema_registry
   stop_kafka_cluster
 }
 
-trap test_cleanup INT
-trap test_cleanup EXIT
+on_exit test_cleanup
 
 setup_kafka_dist
 setup_confluent_dist
 
-start_kafka_cluster
-start_confluent_schema_registry
+retry_times_with_backoff_and_cleanup 3 5 test_setup test_cleanup
 
 TEST_PROGRAM_JAR=${END_TO_END_DIR}/flink-confluent-schema-registry/target/TestAvroConsumerConfluent.jar
 
